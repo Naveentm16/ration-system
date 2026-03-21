@@ -1,21 +1,24 @@
 from flask import Flask, render_template, request, jsonify, redirect, session
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+import random
 
 app = Flask(__name__)
 app.secret_key = "secret123"
 
+# ⏱ 5 MIN SESSION TIMEOUT
+app.permanent_session_lifetime = timedelta(minutes=5)
+
 def db():
     return sqlite3.connect("ration.db")
 
-# ================= DATABASE SETUP =================
+# ================= DATABASE =================
 
 conn = db()
 
-# Users table (with password)
 conn.execute("""
 CREATE TABLE IF NOT EXISTS users(
 id TEXT PRIMARY KEY,
@@ -24,7 +27,7 @@ password TEXT
 )
 """)
 
-# Insert default users
+# Default users
 conn.execute("INSERT OR IGNORE INTO users VALUES ('101','Ravi','123')")
 conn.execute("INSERT OR IGNORE INTO users VALUES ('102','Naveen','123')")
 conn.execute("INSERT OR IGNORE INTO users VALUES ('103','Yalappa','123')")
@@ -32,7 +35,6 @@ conn.execute("INSERT OR IGNORE INTO users VALUES ('104','Kiran','123')")
 conn.execute("INSERT OR IGNORE INTO users VALUES ('105','Vardhaman','123')")
 conn.execute("INSERT OR IGNORE INTO users VALUES ('106','Pranath','123')")
 
-# Entries table
 conn.execute("""
 CREATE TABLE IF NOT EXISTS entries(
 transaction_id TEXT PRIMARY KEY,
@@ -45,6 +47,12 @@ datetime TEXT
 """)
 
 conn.commit()
+
+# ================= SESSION MANAGEMENT =================
+
+@app.before_request
+def session_management():
+    session.modified = True
 
 # ================= USER LOGIN =================
 
@@ -61,6 +69,7 @@ def user_login():
         ).fetchone()
 
         if user:
+            session.permanent = True
             session["user"] = id
             return redirect("/")
 
@@ -68,7 +77,7 @@ def user_login():
 
     return render_template("user_login.html")
 
-# ================= HOME (PROTECTED) =================
+# ================= HOME =================
 
 @app.route("/")
 def home():
@@ -76,7 +85,7 @@ def home():
         return redirect("/user_login")
     return render_template("entry.html")
 
-# ================= FETCH USER NAME =================
+# ================= FETCH USER =================
 
 @app.route("/get_user/<id>")
 def get_user(id):
@@ -84,7 +93,7 @@ def get_user(id):
     user = conn.execute("SELECT name FROM users WHERE id=?",(id,)).fetchone()
     return jsonify({"name": user[0] if user else ""})
 
-# ================= SUBMIT ENTRY =================
+# ================= SUBMIT =================
 
 @app.route("/submit", methods=["POST"])
 def submit():
@@ -99,37 +108,59 @@ def submit():
 
     conn = db()
     conn.execute("INSERT INTO entries VALUES (?,?,?,?,?,?)",
-    (tid,id,name,ration,amount,dt))
+                 (tid,id,name,ration,amount,dt))
     conn.commit()
 
     return "Submitted Successfully"
 
-# ================= ADMIN LOGIN =================
+# ================= ADMIN LOGIN (OTP) =================
 
 @app.route("/login", methods=["GET","POST"])
 def login():
     if request.method == "POST":
         if request.form["username"]=="admin" and request.form["password"]=="1234":
-            session["admin"]=True
-            return redirect("/admin")
+            session.permanent = True
+
+            # Generate OTP
+            otp = str(random.randint(100000,999999))
+            session["otp"] = otp
+
+            print("Admin OTP:", otp)  # Check in Render logs
+
+            return redirect("/verify_otp")
+
     return render_template("login.html")
 
-# ================= ADMIN DASHBOARD =================
+# ================= OTP VERIFY =================
+
+@app.route("/verify_otp", methods=["GET","POST"])
+def verify_otp():
+    if request.method == "POST":
+        if request.form["otp"] == session.get("otp"):
+            session["admin"] = True
+            return redirect("/admin")
+        else:
+            return "Invalid OTP"
+
+    return render_template("otp.html")
+
+# ================= ADMIN =================
 
 @app.route("/admin")
 def admin():
     if "admin" not in session:
         return redirect("/login")
+
     conn = db()
     data = conn.execute("SELECT * FROM entries").fetchall()
     return render_template("admin.html", data=data)
 
-# ================= DELETE ENTRY =================
+# ================= DELETE =================
 
 @app.route("/delete/<tid>")
 def delete(tid):
     conn = db()
-    conn.execute("DELETE FROM entries WHERE transaction_id=?",(tid,))
+    conn.execute("DELETE FROM entries WHERE transaction_id=?", (tid,))
     conn.commit()
     return redirect("/admin")
 
@@ -141,7 +172,7 @@ def report():
     df = pd.read_sql_query("SELECT * FROM entries", conn)
 
     if df.empty:
-        return "No data available to generate report"
+        return "No data available"
 
     summary = df.groupby("ration")["amount"].sum()
 
