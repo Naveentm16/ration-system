@@ -3,6 +3,7 @@ import sqlite3
 from datetime import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
 
 app = Flask(__name__)
 app.secret_key = "secret123"
@@ -10,19 +11,28 @@ app.secret_key = "secret123"
 def db():
     return sqlite3.connect("ration.db")
 
+# ================= DATABASE SETUP =================
+
 conn = db()
-conn.execute("CREATE TABLE IF NOT EXISTS users(
+
+# Users table (with password)
+conn.execute("""
+CREATE TABLE IF NOT EXISTS users(
 id TEXT PRIMARY KEY,
 name TEXT,
 password TEXT
-)")
+)
+""")
+
+# Insert default users
 conn.execute("INSERT OR IGNORE INTO users VALUES ('101','Ravi','123')")
 conn.execute("INSERT OR IGNORE INTO users VALUES ('102','Naveen','123')")
 conn.execute("INSERT OR IGNORE INTO users VALUES ('103','Yalappa','123')")
 conn.execute("INSERT OR IGNORE INTO users VALUES ('104','Kiran','123')")
 conn.execute("INSERT OR IGNORE INTO users VALUES ('105','Vardhaman','123')")
 conn.execute("INSERT OR IGNORE INTO users VALUES ('106','Pranath','123')")
-conn.commit()
+
+# Entries table
 conn.execute("""
 CREATE TABLE IF NOT EXISTS entries(
 transaction_id TEXT PRIMARY KEY,
@@ -33,82 +43,11 @@ amount REAL,
 datetime TEXT
 )
 """)
+
 conn.commit()
 
-@app.route("/")
-def home():
-    return render_template("entry.html")
+# ================= USER LOGIN =================
 
-@app.route("/get_user/<id>")
-def get_user(id):
-    conn = db()
-    user = conn.execute("SELECT name FROM users WHERE id=?",(id,)).fetchone()
-    return jsonify({"name": user[0] if user else ""})
-
-@app.route("/submit", methods=["POST"])
-def submit():
-    id = request.form["id"]
-    name = request.form["name"]
-    ration = request.form["ration"]
-    amount = request.form["amount"]
-
-    now = datetime.now()
-    dt = now.strftime("%Y-%m-%d %H:%M:%S")
-    tid = id + now.strftime("%Y%m%d%H%M%S")
-
-    conn = db()
-    conn.execute("INSERT INTO entries VALUES (?,?,?,?,?,?)",
-    (tid,id,name,ration,amount,dt))
-    conn.commit()
-
-    return "Submitted Successfully"
-
-@app.route("/login", methods=["GET","POST"])
-def login():
-    if request.method == "POST":
-        if request.form["username"]=="admin" and request.form["password"]=="1234":
-            session["admin"]=True
-            return redirect("/admin")
-    return render_template("login.html")
-
-@app.route("/admin")
-def admin():
-    if "admin" not in session:
-        return redirect("/login")
-    conn = db()
-    data = conn.execute("SELECT * FROM entries").fetchall()
-    return render_template("admin.html", data=data)
-
-@app.route("/delete/<tid>")
-def delete(tid):
-    conn = db()
-    conn.execute("DELETE FROM entries WHERE transaction_id=?",(tid,))
-    conn.commit()
-    return redirect("/admin")
-
-@app.route("/report")
-def report():
-    conn = db()
-    df = pd.read_sql_query("SELECT * FROM entries", conn)
-
-    if df.empty:
-        return "No data available to generate report"
-
-    summary = df.groupby("ration")["amount"].sum()
-
-    import os
-    os.makedirs("static", exist_ok=True)
-
-    summary.plot(kind="bar")
-
-    plt.title("Ration Report")
-    plt.xlabel("Ration")
-    plt.ylabel("Total Amount")
-
-    plt.savefig("static/chart.png")
-    plt.close()
-
-    return render_template("report.html")
 @app.route("/user_login", methods=["GET","POST"])
 def user_login():
     if request.method == "POST":
@@ -128,10 +67,98 @@ def user_login():
         return "Invalid ID or Password"
 
     return render_template("user_login.html")
+
+# ================= HOME (PROTECTED) =================
+
 @app.route("/")
 def home():
     if "user" not in session:
         return redirect("/user_login")
     return render_template("entry.html")
+
+# ================= FETCH USER NAME =================
+
+@app.route("/get_user/<id>")
+def get_user(id):
+    conn = db()
+    user = conn.execute("SELECT name FROM users WHERE id=?",(id,)).fetchone()
+    return jsonify({"name": user[0] if user else ""})
+
+# ================= SUBMIT ENTRY =================
+
+@app.route("/submit", methods=["POST"])
+def submit():
+    id = request.form["id"]
+    name = request.form["name"]
+    ration = request.form["ration"]
+    amount = request.form["amount"]
+
+    now = datetime.now()
+    dt = now.strftime("%Y-%m-%d %H:%M:%S")
+    tid = id + now.strftime("%Y%m%d%H%M%S")
+
+    conn = db()
+    conn.execute("INSERT INTO entries VALUES (?,?,?,?,?,?)",
+    (tid,id,name,ration,amount,dt))
+    conn.commit()
+
+    return "Submitted Successfully"
+
+# ================= ADMIN LOGIN =================
+
+@app.route("/login", methods=["GET","POST"])
+def login():
+    if request.method == "POST":
+        if request.form["username"]=="admin" and request.form["password"]=="1234":
+            session["admin"]=True
+            return redirect("/admin")
+    return render_template("login.html")
+
+# ================= ADMIN DASHBOARD =================
+
+@app.route("/admin")
+def admin():
+    if "admin" not in session:
+        return redirect("/login")
+    conn = db()
+    data = conn.execute("SELECT * FROM entries").fetchall()
+    return render_template("admin.html", data=data)
+
+# ================= DELETE ENTRY =================
+
+@app.route("/delete/<tid>")
+def delete(tid):
+    conn = db()
+    conn.execute("DELETE FROM entries WHERE transaction_id=?",(tid,))
+    conn.commit()
+    return redirect("/admin")
+
+# ================= REPORT =================
+
+@app.route("/report")
+def report():
+    conn = db()
+    df = pd.read_sql_query("SELECT * FROM entries", conn)
+
+    if df.empty:
+        return "No data available to generate report"
+
+    summary = df.groupby("ration")["amount"].sum()
+
+    os.makedirs("static", exist_ok=True)
+
+    summary.plot(kind="bar")
+
+    plt.title("Ration Report")
+    plt.xlabel("Ration")
+    plt.ylabel("Total Amount")
+
+    plt.savefig("static/chart.png")
+    plt.close()
+
+    return render_template("report.html")
+
+# ================= RUN =================
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
