@@ -11,13 +11,17 @@ def db():
     return sqlite3.connect("ration.db")
 
 conn = db()
-conn.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT)")
-conn.execute("INSERT OR IGNORE INTO users VALUES ('101','Ravi')")
-conn.execute("INSERT OR IGNORE INTO users VALUES ('102','Naveen')")
-conn.execute("INSERT OR IGNORE INTO users VALUES ('103','Yalappa')")
-conn.execute("INSERT OR IGNORE INTO users VALUES ('104','Kiran')")
-conn.execute("INSERT OR IGNORE INTO users VALUES ('105','Vardhaman')")
-conn.execute("INSERT OR IGNORE INTO users VALUES ('106','Pranath')")
+conn.execute("CREATE TABLE IF NOT EXISTS users(
+id TEXT PRIMARY KEY,
+name TEXT,
+password TEXT
+)")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('101','Ravi','123')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('102','Naveen','123')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('103','Yalappa','123')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('104','Kiran','123')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('105','Vardhaman','123')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('106','Pranath','123')")
 conn.commit()
 conn.execute("""
 CREATE TABLE IF NOT EXISTS entries(
@@ -105,5 +109,29 @@ def report():
     plt.close()
 
     return render_template("report.html")
+@app.route("/user_login", methods=["GET","POST"])
+def user_login():
+    if request.method == "POST":
+        id = request.form["id"]
+        password = request.form["password"]
+
+        conn = db()
+        user = conn.execute(
+            "SELECT * FROM users WHERE id=? AND password=?",
+            (id, password)
+        ).fetchone()
+
+        if user:
+            session["user"] = id
+            return redirect("/")
+
+        return "Invalid ID or Password"
+
+    return render_template("user_login.html")
+@app.route("/")
+def home():
+    if "user" not in session:
+        return redirect("/user_login")
+    return render_template("entry.html")
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
