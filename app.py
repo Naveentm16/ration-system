@@ -12,6 +12,13 @@ def db():
 
 conn = db()
 conn.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT)")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('101','Ravi')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('102','Naveen')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('103','Yalappa')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('104','Kiran')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('105','Vardhaman')")
+conn.execute("INSERT OR IGNORE INTO users VALUES ('106','Pranath')")
+conn.commit()
 conn.execute("""
 CREATE TABLE IF NOT EXISTS entries(
 transaction_id TEXT PRIMARY KEY,
