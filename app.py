@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import os
 import random
 
+os.makedirs("static", exist_ok=True)
+
 app = Flask(__name__)
 app.secret_key = "secret123"
 
@@ -13,11 +15,12 @@ app.secret_key = "secret123"
 app.permanent_session_lifetime = timedelta(minutes=5)
 
 def db():
-    return sqlite3.connect("ration.db")
+    return sqlite3.connect("/tmp/ration.db")
 
 # ================= DATABASE =================
 
 conn = db()
+conn.row_factory = sqlite3.Row
 
 conn.execute("""
 CREATE TABLE IF NOT EXISTS users(
@@ -192,4 +195,4 @@ def report():
 # ================= RUN =================
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(debug=True)
