@@ -5,10 +5,11 @@ from datetime import datetime, timedelta
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+import random
 
 # ================= CONFIG =================
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev_secret")
+app.secret_key = "secret123"
 app.permanent_session_lifetime = timedelta(minutes=5)
 os.makedirs("static", exist_ok=True)
 
@@ -96,24 +97,28 @@ def home():
     conn.close()
     return render_template("entry.html", entries=entries, user_name=user["name"])
 
-# ================= SUBMIT ENTRY =================
+# ================= MULTIPLE ENTRIES SUBMISSION =================
 @app.route("/submit", methods=["POST"])
 def submit():
     if "user" not in session:
         return redirect("/user_login")
     id = session["user"]
     name = request.form["name"]
-    ration = request.form["ration"]
-    amount = float(request.form["amount"])
-    now = datetime.now()
-    dt = now.strftime("%Y-%m-%d %H:%M:%S")
-    tid = id + now.strftime("%Y%m%d%H%M%S")
+
+    # Multiple entries support
+    rations = request.form.getlist("ration[]")
+    amounts = request.form.getlist("amount[]")
+
     conn = get_db()
-    conn.execute("INSERT INTO entries VALUES (?,?,?,?,?,?)",
-                 (tid, id, name, ration, amount, dt))
+    now = datetime.now()
+    for r, a in zip(rations, amounts):
+        tid = id + now.strftime("%Y%m%d%H%M%S") + str(random.randint(100,999))
+        dt = now.strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute("INSERT INTO entries VALUES (?,?,?,?,?,?)",
+                     (tid, id, name, r, float(a), dt))
     conn.commit()
     conn.close()
-    return "Submitted Successfully"
+    return redirect("/")
 
 # ================= UPDATE ENTRY =================
 @app.route("/update/<tid>", methods=["GET","POST"])
@@ -137,9 +142,15 @@ def update_entry(tid):
                      (ration, amount, dt, tid))
         conn.commit()
         conn.close()
-        return "Entry updated successfully"
+        return redirect("/")
     conn.close()
     return render_template("update_entry.html", entry=entry)
+
+# ================= USER LOGOUT =================
+@app.route("/user_logout")
+def user_logout():
+    session.pop("user", None)
+    return redirect("/user_login")
 
 # ================= ADMIN LOGIN =================
 @app.route("/login", methods=["GET","POST"])
@@ -162,9 +173,15 @@ def admin():
         return redirect("/login")
     conn = get_db()
     data = conn.execute("SELECT * FROM entries").fetchall()
-    settlements = conn.execute("SELECT * FROM settlements").fetchall()
+    settlements = conn.execute("SELECT * FROM settlements ORDER BY month DESC").fetchall()
     conn.close()
     return render_template("admin.html", data=data, settlements=settlements)
+
+# ================= ADMIN LOGOUT =================
+@app.route("/admin_logout")
+def admin_logout():
+    session.pop("admin", None)
+    return redirect("/login")
 
 # ================= DELETE ENTRY =================
 @app.route("/delete/<tid>")
@@ -191,33 +208,41 @@ def calculate_monthly():
         conn.close()
         return f"{month} is already settled."
     df = pd.read_sql_query(
-        "SELECT id, name, SUM(amount) as paid FROM entries WHERE strftime('%Y-%m', datetime)=? GROUP BY id, name",
+        "SELECT transaction_id, id, name, ration, amount, datetime FROM entries WHERE strftime('%Y-%m', datetime)=?",
         conn, params=(month,)
     )
     if df.empty:
         conn.close()
         return f"No data for {month}"
-    total_amount = df["paid"].sum()
-    num_users = len(df)
+
+    total_amount = df["amount"].sum()
+    num_users = df["id"].nunique()
     per_person_share = total_amount / num_users
-    df["balance"] = df["paid"] - per_person_share
+
+    # Group by user
+    user_totals = df.groupby(["id","name"])["amount"].sum().reset_index()
+    user_totals["balance"] = user_totals["amount"] - per_person_share
+
     # Redistribute extra
-    extra = df.loc[df["balance"] > 0, "balance"].sum()
-    owes = df.loc[df["balance"] < 0, "balance"].sum() * -1
+    extra = user_totals.loc[user_totals["balance"] > 0, "balance"].sum()
+    owes = -user_totals.loc[user_totals["balance"] < 0, "balance"].sum()
     if extra > 0 and owes > 0:
-        for idx, row in df.iterrows():
+        for idx, row in user_totals.iterrows():
             if row["balance"] < 0:
                 share = min(-row["balance"], extra * (-row["balance"]/owes))
-                df.at[idx, "balance"] += share
+                user_totals.at[idx, "balance"] += share
+
+    # Save settlement record (not marked settled)
     conn.execute("""
         INSERT OR REPLACE INTO settlements (month, total_amount, per_person, is_settled)
         VALUES (?,?,?,0)
     """, (month, total_amount, per_person_share))
     conn.commit()
     conn.close()
+
     return render_template("monthly_settlement.html",
                            month=month,
-                           df=df.to_dict(orient="records"),
+                           df=user_totals.to_dict(orient="records"),
                            total=total_amount,
                            per_person=per_person_share)
 
@@ -230,7 +255,7 @@ def settle_month(month):
     conn.execute("UPDATE settlements SET is_settled=1 WHERE month=?", (month,))
     conn.commit()
     conn.close()
-    return f"Month {month} marked as settled."
+    return redirect("/admin")
 
 # ================= REPORT =================
 @app.route("/report")
@@ -256,4 +281,4 @@ def report():
 
 # ================= RUN APP =================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+    app.run(debug=True)
