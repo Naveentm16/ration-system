@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, render_template, request, redirect, session
 import sqlite3
 from datetime import datetime, timedelta
@@ -47,7 +46,8 @@ CREATE TABLE IF NOT EXISTS entries(
     name TEXT,
     ration TEXT,
     amount REAL,
-    datetime TEXT
+    datetime TEXT,
+    calculated INTEGER DEFAULT 0
 )
 """)
 conn.execute("""
@@ -105,7 +105,6 @@ def submit():
     id = session["user"]
     name = request.form["name"]
 
-    # Multiple entries support
     rations = request.form.getlist("ration[]")
     amounts = request.form.getlist("amount[]")
 
@@ -114,7 +113,7 @@ def submit():
     for r, a in zip(rations, amounts):
         tid = id + now.strftime("%Y%m%d%H%M%S") + str(random.randint(100,999))
         dt = now.strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute("INSERT INTO entries VALUES (?,?,?,?,?,?)",
+        conn.execute("INSERT INTO entries VALUES (?,?,?,?,?,?,0)",
                      (tid, id, name, r, float(a), dt))
     conn.commit()
     conn.close()
@@ -202,41 +201,47 @@ def calculate_monthly():
     month = request.args.get("month")  # YYYY-MM
     if not month:
         return "Please select a month"
+
     conn = get_db()
-    settled = conn.execute("SELECT is_settled FROM settlements WHERE month=?", (month,)).fetchone()
-    if settled and settled["is_settled"] == 1:
-        conn.close()
-        return f"{month} is already settled."
     df = pd.read_sql_query(
-        "SELECT transaction_id, id, name, ration, amount, datetime FROM entries WHERE strftime('%Y-%m', datetime)=?",
+        "SELECT transaction_id, id, name, ration, amount FROM entries "
+        "WHERE strftime('%Y-%m', datetime)=? AND calculated=0",
         conn, params=(month,)
     )
+
     if df.empty:
         conn.close()
-        return f"No data for {month}"
+        return f"No new transactions to calculate for {month}"
 
-    total_amount = df["amount"].sum()
-    num_users = df["id"].nunique()
-    per_person_share = total_amount / num_users
-
-    # Group by user
+    # Total per user
     user_totals = df.groupby(["id","name"])["amount"].sum().reset_index()
-    user_totals["balance"] = user_totals["amount"] - per_person_share
+    total_amount = user_totals["amount"].sum()
+    num_users = len(user_totals)
+    average = total_amount / num_users
 
-    # Redistribute extra
-    extra = user_totals.loc[user_totals["balance"] > 0, "balance"].sum()
-    owes = -user_totals.loc[user_totals["balance"] < 0, "balance"].sum()
-    if extra > 0 and owes > 0:
-        for idx, row in user_totals.iterrows():
-            if row["balance"] < 0:
-                share = min(-row["balance"], extra * (-row["balance"]/owes))
-                user_totals.at[idx, "balance"] += share
+    # Balance calculation
+    user_totals["balance"] = user_totals["amount"] - average
 
-    # Save settlement record (not marked settled)
+    # Redistribute extra/less
+    positives = user_totals[user_totals["balance"] > 0].copy()
+    negatives = user_totals[user_totals["balance"] < 0].copy()
+    total_positive = positives["balance"].sum()
+    total_negative = -negatives["balance"].sum()
+
+    if total_positive > 0 and total_negative > 0:
+        for i, neg in negatives.iterrows():
+            for j, pos in positives.iterrows():
+                share = min(pos["balance"], -neg["balance"] * pos["balance"]/total_positive)
+                user_totals.loc[user_totals["id"]==neg["id"], "balance"] += share
+                user_totals.loc[user_totals["id"]==pos["id"], "balance"] -= share
+
+    # Save settlement
     conn.execute("""
         INSERT OR REPLACE INTO settlements (month, total_amount, per_person, is_settled)
         VALUES (?,?,?,0)
-    """, (month, total_amount, per_person_share))
+    """, (month, total_amount, average))
+    # Mark transactions as calculated
+    conn.execute("UPDATE entries SET calculated=1 WHERE strftime('%Y-%m', datetime)=?", (month,))
     conn.commit()
     conn.close()
 
@@ -244,7 +249,7 @@ def calculate_monthly():
                            month=month,
                            df=user_totals.to_dict(orient="records"),
                            total=total_amount,
-                           per_person=per_person_share)
+                           per_person=average)
 
 # ================= MARK MONTH AS SETTLED =================
 @app.route("/settle_month/<month>")
@@ -253,6 +258,20 @@ def settle_month(month):
         return redirect("/login")
     conn = get_db()
     conn.execute("UPDATE settlements SET is_settled=1 WHERE month=?", (month,))
+    conn.commit()
+    conn.close()
+    return redirect("/admin")
+
+# ================= CANCEL SETTLEMENT =================
+@app.route("/cancel_settlement/<month>")
+def cancel_settlement(month):
+    if "admin" not in session:
+        return redirect("/login")
+    conn = get_db()
+    # Reset settlement
+    conn.execute("UPDATE settlements SET is_settled=0 WHERE month=?", (month,))
+    # Reset transactions as not calculated
+    conn.execute("UPDATE entries SET calculated=0 WHERE strftime('%Y-%m', datetime)=?", (month,))
     conn.commit()
     conn.close()
     return redirect("/admin")
