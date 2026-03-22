@@ -33,18 +33,28 @@
     <table class="table table-bordered">
         <thead class="table-dark">
             <tr>
+                <th>Transaction ID</th>
                 <th>Ration</th>
                 <th>Amount</th>
                 <th>DateTime</th>
+                <th>Calculated</th>
                 <th>Action</th>
             </tr>
         </thead>
         <tbody>
             {% for e in entries %}
             <tr>
+                <td>{{ e['transaction_id'] }}</td>
                 <td>{{ e['ration'] }}</td>
                 <td>{{ "%.2f"|format(e['amount']) }}</td>
                 <td>{{ e['datetime'] }}</td>
+                <td>
+                    {% if e['calculated']==1 %}
+                    <span class="badge bg-success">Yes</span>
+                    {% else %}
+                    <span class="badge bg-warning">No</span>
+                    {% endif %}
+                </td>
                 <td><a href="/update/{{ e['transaction_id'] }}" class="btn btn-sm btn-warning">Update</a></td>
             </tr>
             {% endfor %}
