@@ -9,10 +9,10 @@ import os
 # ================= CONFIG =================
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev_secret")  # Use env variable in production
-app.permanent_session_lifetime = timedelta(minutes=5)  # 5-minute session timeout
+app.secret_key = os.environ.get("SECRET_KEY", "dev_secret")
+app.permanent_session_lifetime = timedelta(minutes=5)
 
-os.makedirs("static", exist_ok=True)  # for charts
+os.makedirs("static", exist_ok=True)
 
 DB_PATH = "ration.db"
 
@@ -23,7 +23,7 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-# Initialize tables and default users
+# Initialize tables
 conn = get_db()
 conn.execute("""
 CREATE TABLE IF NOT EXISTS users(
@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS users(
     password TEXT
 )
 """)
-
 default_users = [
     ('101','Ravi','123'),
     ('102','Naveen','123'),
@@ -41,7 +40,6 @@ default_users = [
     ('105','Vardhaman','123'),
     ('106','Pranath','123')
 ]
-
 conn.executemany("INSERT OR IGNORE INTO users VALUES (?,?,?)", default_users)
 
 conn.execute("""
@@ -54,6 +52,15 @@ CREATE TABLE IF NOT EXISTS entries(
     datetime TEXT
 )
 """)
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS settlements (
+    month TEXT PRIMARY KEY,
+    total_amount REAL,
+    per_person REAL,
+    is_settled INTEGER DEFAULT 0
+)
+""")
 conn.commit()
 conn.close()
 
@@ -61,7 +68,7 @@ conn.close()
 
 @app.before_request
 def session_management():
-    session.modified = True  # refresh session expiry on activity
+    session.modified = True
 
 # ================= USER LOGIN =================
 
@@ -92,7 +99,12 @@ def user_login():
 def home():
     if "user" not in session:
         return redirect("/user_login")
-    return render_template("entry.html")
+
+    user_id = session["user"]
+    conn = get_db()
+    entries = conn.execute("SELECT * FROM entries WHERE id=?", (user_id,)).fetchall()
+    conn.close()
+    return render_template("entry.html", entries=entries)
 
 # ================= FETCH USER =================
 
@@ -107,7 +119,10 @@ def get_user(id):
 
 @app.route("/submit", methods=["POST"])
 def submit():
-    id = request.form["id"]
+    if "user" not in session:
+        return redirect("/user_login")
+
+    id = session["user"]
     name = request.form["name"]
     ration = request.form["ration"]
     amount = float(request.form["amount"])
@@ -123,6 +138,42 @@ def submit():
     conn.close()
 
     return "Submitted Successfully"
+
+# ================= UPDATE ENTRY =================
+
+@app.route("/update/<tid>", methods=["GET","POST"])
+def update_entry(tid):
+    if "user" not in session:
+        return redirect("/user_login")
+
+    user_id = session["user"]
+    conn = get_db()
+    entry = conn.execute("SELECT * FROM entries WHERE transaction_id=?", (tid,)).fetchone()
+
+    if not entry:
+        conn.close()
+        return "Entry not found"
+
+    if entry["id"] != user_id:
+        conn.close()
+        return "You are not allowed to update this entry"
+
+    if request.method == "POST":
+        ration = request.form["ration"]
+        amount = float(request.form["amount"])
+        dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        conn.execute("""
+            UPDATE entries
+            SET ration=?, amount=?, datetime=?
+            WHERE transaction_id=?
+        """, (ration, amount, dt, tid))
+        conn.commit()
+        conn.close()
+        return "Entry updated successfully"
+
+    conn.close()
+    return render_template("update_entry.html", entry=entry)
 
 # ================= ADMIN LOGIN =================
 
@@ -141,7 +192,7 @@ def login():
 
     return render_template("login.html")
 
-# ================= ADMIN =================
+# ================= ADMIN DASHBOARD =================
 
 @app.route("/admin")
 def admin():
@@ -150,9 +201,10 @@ def admin():
 
     conn = get_db()
     data = conn.execute("SELECT * FROM entries").fetchall()
+    settlements = conn.execute("SELECT * FROM settlements").fetchall()
     conn.close()
 
-    return render_template("admin.html", data=data)
+    return render_template("admin.html", data=data, settlements=settlements)
 
 # ================= DELETE ENTRY =================
 
@@ -195,6 +247,71 @@ def report():
     plt.close()
 
     return render_template("report.html", chart_path=chart_path)
+
+# ================= MONTHLY SETTLEMENT =================
+
+@app.route("/calculate_monthly/<month>")
+def calculate_monthly(month):
+    if "admin" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    settled = conn.execute("SELECT is_settled FROM settlements WHERE month=?", (month,)).fetchone()
+    if settled and settled["is_settled"] == 1:
+        conn.close()
+        return f"{month} is already settled."
+
+    df = pd.read_sql_query(
+        "SELECT id, name, SUM(amount) as paid FROM entries WHERE strftime('%Y-%m', datetime)=? GROUP BY id, name",
+        conn,
+        params=(month,)
+    )
+
+    if df.empty:
+        conn.close()
+        return f"No data for {month}"
+
+    total_amount = df["paid"].sum()
+    num_users = len(df)
+    per_person_share = total_amount / num_users
+
+    df["balance"] = df["paid"] - per_person_share
+
+    # Redistribute extra if someone paid more
+    extra = df.loc[df["balance"] > 0, "balance"].sum()
+    owes = df.loc[df["balance"] < 0, "balance"].sum() * -1
+    if extra > 0 and owes > 0:
+        for idx, row in df.iterrows():
+            if row["balance"] < 0:
+                share = min(-row["balance"], extra * (-row["balance"]/owes))
+                df.at[idx, "balance"] += share
+
+    conn.execute("""
+        INSERT OR REPLACE INTO settlements (month, total_amount, per_person, is_settled)
+        VALUES (?,?,?,0)
+    """, (month, total_amount, per_person_share))
+    conn.commit()
+    conn.close()
+
+    return render_template("monthly_settlement.html",
+                           month=month,
+                           df=df.to_dict(orient="records"),
+                           total=total_amount,
+                           per_person=per_person_share)
+
+# ================= MARK MONTH AS SETTLED =================
+
+@app.route("/settle_month/<month>")
+def settle_month(month):
+    if "admin" not in session:
+        return redirect("/login")
+
+    conn = get_db()
+    conn.execute("UPDATE settlements SET is_settled=1 WHERE month=?", (month,))
+    conn.commit()
+    conn.close()
+
+    return f"Month {month} marked as settled."
 
 # ================= RUN =================
 
