@@ -12,47 +12,65 @@
         <a href="/admin_logout" class="btn btn-danger">Logout</a>
     </div>
 
-    <a href="/report" class="btn btn-info mb-3">View Ration Report</a>
-
     <h5>All Entries</h5>
-    <table class="table table-bordered">
-        <thead class="table-dark">
-            <tr>
-                <th>ID</th>
-                <th>Name</th>
-                <th>Ration</th>
-                <th>Amount</th>
-                <th>DateTime</th>
-                <th>Calculated</th>
-                <th>Action</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for e in data %}
-            <tr>
-                <td>{{ e['id'] }}</td>
-                <td>{{ e['name'] }}</td>
-                <td>{{ e['ration'] }}</td>
-                <td>{{ "%.2f"|format(e['amount']) }}</td>
-                <td>{{ e['datetime'] }}</td>
-                <td>
-                    {% if e['calculated'] == 1 %}
+    <form method="post" action="/calculate_selected_users">
+        <table class="table table-bordered">
+            <thead class="table-dark">
+                <tr>
+                    <th>Select</th>
+                    <th>Transaction ID</th>
+                    <th>User ID</th>
+                    <th>Name</th>
+                    <th>Ration</th>
+                    <th>Amount</th>
+                    <th>DateTime</th>
+                    <th>Calculated</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in data %}
+                <tr>
+                    <td>
+                        {% if e['calculated']==0 %}
+                        <input type="checkbox" name="selected_tids" value="{{ e['transaction_id'] }}">
+                        {% endif %}
+                    </td>
+                    <td>{{ e['transaction_id'] }}</td>
+                    <td>{{ e['id'] }}</td>
+                    <td>{{ e['name'] }}</td>
+                    <td>{{ e['ration'] }}</td>
+                    <td>{{ "%.2f"|format(e['amount']) }}</td>
+                    <td>{{ e['datetime'] }}</td>
+                    <td>
+                        {% if e['calculated']==1 %}
                         <span class="badge bg-success">Yes</span>
-                    {% else %}
+                        {% else %}
                         <span class="badge bg-warning">No</span>
-                    {% endif %}
-                </td>
-                <td><a href="/delete/{{ e['transaction_id'] }}" class="btn btn-sm btn-danger">Delete</a></td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h5>Select Users for Average</h5>
+        {% for u in users %}
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="checkbox" name="selected_users" value="{{ u['id'] }}" checked>
+            <label class="form-check-label">{{ u['name'] }}</label>
+        </div>
+        {% endfor %}
+
+        <div class="mt-3">
+            <button type="submit" class="btn btn-success">Calculate Selected Transactions</button>
+        </div>
+    </form>
 
     <h5 class="mt-4">Monthly Settlements</h5>
     <table class="table table-bordered">
         <thead class="table-dark">
             <tr>
-                <th>Month</th>
+                <th>Month ID</th>
                 <th>Total Amount</th>
                 <th>Per Person</th>
                 <th>Status</th>
@@ -66,33 +84,23 @@
                 <td>{{ "%.2f"|format(s['total_amount']) }}</td>
                 <td>{{ "%.2f"|format(s['per_person']) }}</td>
                 <td>
-                    {% if s['is_settled'] == 1 %}
-                        <span class="badge bg-success">Settled</span>
+                    {% if s['is_settled']==1 %}
+                    <span class="badge bg-success">Settled</span>
                     {% else %}
-                        <span class="badge bg-warning">Pending</span>
+                    <span class="badge bg-warning">Pending</span>
                     {% endif %}
                 </td>
                 <td>
-                    {% if s['is_settled'] == 0 %}
-                        <a href="/settle_month/{{ s['month'] }}" class="btn btn-sm btn-primary">Mark Settled</a>
+                    {% if s['is_settled']==0 %}
+                    <a href="/settle_month/{{ s['month'] }}" class="btn btn-sm btn-primary">Mark Settled</a>
                     {% else %}
-                        <a href="/cancel_settlement/{{ s['month'] }}" class="btn btn-sm btn-danger">Cancel Settlement</a>
+                    <a href="/cancel_settlement/{{ s['month'] }}" class="btn btn-sm btn-danger">Cancel Settlement</a>
                     {% endif %}
                 </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
-
-    <h5 class="mt-4">Calculate Settlement</h5>
-    <form method="get" action="/calculate_monthly" class="row g-2">
-        <div class="col-auto">
-            <input type="month" name="month" class="form-control" required>
-        </div>
-        <div class="col-auto">
-            <button class="btn btn-success">Calculate</button>
-        </div>
-    </form>
 </div>
 </body>
 </html>
