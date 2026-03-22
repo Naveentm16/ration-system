@@ -73,10 +73,7 @@ def user_login():
         id = request.form["id"]
         password = request.form["password"]
         conn = get_db()
-        user = conn.execute(
-            "SELECT * FROM users WHERE id=? AND password=?",
-            (id, password)
-        ).fetchone()
+        user = conn.execute("SELECT * FROM users WHERE id=? AND password=?", (id, password)).fetchone()
         conn.close()
         if user:
             session.permanent = True
@@ -113,8 +110,7 @@ def submit():
     for r, a in zip(rations, amounts):
         tid = id + now.strftime("%Y%m%d%H%M%S") + str(random.randint(100,999))
         dt = now.strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute("INSERT INTO entries VALUES (?,?,?,?,?,?,0)",
-                     (tid, id, name, r, float(a), dt))
+        conn.execute("INSERT INTO entries VALUES (?,?,?,?,?,?,0)", (tid, id, name, r, float(a), dt))
     conn.commit()
     conn.close()
     return redirect("/")
@@ -137,8 +133,7 @@ def update_entry(tid):
         ration = request.form["ration"]
         amount = float(request.form["amount"])
         dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute("UPDATE entries SET ration=?, amount=?, datetime=? WHERE transaction_id=?",
-                     (ration, amount, dt, tid))
+        conn.execute("UPDATE entries SET ration=?, amount=?, datetime=? WHERE transaction_id=?", (ration, amount, dt, tid))
         conn.commit()
         conn.close()
         return redirect("/")
@@ -161,8 +156,7 @@ def login():
             session.permanent = True
             session["admin"] = True
             return redirect("/admin")
-        else:
-            return "Invalid username or password"
+        return "Invalid username or password"
     return render_template("login.html")
 
 # ================= ADMIN DASHBOARD =================
@@ -172,9 +166,10 @@ def admin():
         return redirect("/login")
     conn = get_db()
     data = conn.execute("SELECT * FROM entries").fetchall()
+    users = conn.execute("SELECT id, name FROM users").fetchall()
     settlements = conn.execute("SELECT * FROM settlements ORDER BY month DESC").fetchall()
     conn.close()
-    return render_template("admin.html", data=data, settlements=settlements)
+    return render_template("admin.html", data=data, users=users, settlements=settlements)
 
 # ================= ADMIN LOGOUT =================
 @app.route("/admin_logout")
@@ -193,41 +188,50 @@ def delete(tid):
     conn.close()
     return redirect("/admin")
 
-# ================= CALCULATE MONTHLY SETTLEMENT =================
-@app.route("/calculate_monthly", methods=["GET"])
-def calculate_monthly():
+# ================= CALCULATE SELECTED TRANSACTIONS WITH SELECTED USERS =================
+@app.route("/calculate_selected_users", methods=["POST"])
+def calculate_selected_users():
     if "admin" not in session:
         return redirect("/login")
-    month = request.args.get("month")  # YYYY-MM
-    if not month:
-        return "Please select a month"
+
+    selected_tids = request.form.getlist("selected_tids")
+    selected_users = request.form.getlist("selected_users")
+
+    if not selected_users:
+        return "No users selected"
 
     conn = get_db()
-    df = pd.read_sql_query(
-        "SELECT transaction_id, id, name, ration, amount FROM entries "
-        "WHERE strftime('%Y-%m', datetime)=? AND calculated=0",
-        conn, params=(month,)
-    )
 
-    if df.empty:
-        conn.close()
-        return f"No new transactions to calculate for {month}"
+    # Fetch transactions for selected users and tids
+    if selected_tids:
+        df = pd.read_sql_query(
+            f"SELECT transaction_id, id, name, amount FROM entries "
+            f"WHERE id IN ({','.join(['?']*len(selected_users))}) "
+            f"AND transaction_id IN ({','.join(['?']*len(selected_tids))})",
+            conn, params=selected_users + selected_tids
+        )
+    else:
+        # If no transaction selected, consider zero for users
+        df = pd.DataFrame(columns=["transaction_id","id","name","amount"])
 
-    # Total per user
-    user_totals = df.groupby(["id","name"])["amount"].sum().reset_index()
+    # Prepare all selected users
+    all_users = pd.DataFrame({"id": [u for u in selected_users]})
+    df_totals = df.groupby(["id","name"])["amount"].sum().reset_index()
+    user_totals = pd.merge(all_users, df_totals, on="id", how="left")
+    user_totals["name"] = user_totals["name"].fillna(user_totals["id"])
+    user_totals["amount"] = user_totals["amount"].fillna(0)
+
+    # Average among all selected users
     total_amount = user_totals["amount"].sum()
     num_users = len(user_totals)
     average = total_amount / num_users
-
-    # Balance calculation
     user_totals["balance"] = user_totals["amount"] - average
 
-    # Redistribute extra/less
+    # Redistribute extra
     positives = user_totals[user_totals["balance"] > 0].copy()
     negatives = user_totals[user_totals["balance"] < 0].copy()
     total_positive = positives["balance"].sum()
     total_negative = -negatives["balance"].sum()
-
     if total_positive > 0 and total_negative > 0:
         for i, neg in negatives.iterrows():
             for j, pos in positives.iterrows():
@@ -235,23 +239,25 @@ def calculate_monthly():
                 user_totals.loc[user_totals["id"]==neg["id"], "balance"] += share
                 user_totals.loc[user_totals["id"]==pos["id"], "balance"] -= share
 
-    # Save settlement
-    conn.execute("""
-        INSERT OR REPLACE INTO settlements (month, total_amount, per_person, is_settled)
-        VALUES (?,?,?,0)
-    """, (month, total_amount, average))
     # Mark transactions as calculated
-    conn.execute("UPDATE entries SET calculated=1 WHERE strftime('%Y-%m', datetime)=?", (month,))
+    if selected_tids:
+        conn.execute(f"UPDATE entries SET calculated=1 WHERE transaction_id IN ({','.join(['?']*len(selected_tids))})",
+                     selected_tids)
+
+    # Save settlement with timestamp ID
+    settlement_id = datetime.now().strftime("%Y%m%d%H%M%S")
+    conn.execute("INSERT INTO settlements (month,total_amount,per_person,is_settled) VALUES (?,?,?,0)",
+                 (settlement_id, total_amount, average))
     conn.commit()
     conn.close()
 
     return render_template("monthly_settlement.html",
-                           month=month,
+                           month=settlement_id,
                            df=user_totals.to_dict(orient="records"),
                            total=total_amount,
                            per_person=average)
 
-# ================= MARK MONTH AS SETTLED =================
+# ================= MARK / CANCEL SETTLEMENT =================
 @app.route("/settle_month/<month>")
 def settle_month(month):
     if "admin" not in session:
@@ -262,41 +268,16 @@ def settle_month(month):
     conn.close()
     return redirect("/admin")
 
-# ================= CANCEL SETTLEMENT =================
 @app.route("/cancel_settlement/<month>")
 def cancel_settlement(month):
     if "admin" not in session:
         return redirect("/login")
     conn = get_db()
-    # Reset settlement
     conn.execute("UPDATE settlements SET is_settled=0 WHERE month=?", (month,))
-    # Reset transactions as not calculated
     conn.execute("UPDATE entries SET calculated=0 WHERE strftime('%Y-%m', datetime)=?", (month,))
     conn.commit()
     conn.close()
     return redirect("/admin")
-
-# ================= REPORT =================
-@app.route("/report")
-def report():
-    if "admin" not in session:
-        return redirect("/login")
-    conn = get_db()
-    df = pd.read_sql_query("SELECT * FROM entries", conn)
-    conn.close()
-    if df.empty:
-        return "No data available"
-    summary = df.groupby("ration")["amount"].sum()
-    plt.figure(figsize=(8,5))
-    summary.plot(kind="bar")
-    plt.title("Ration Report")
-    plt.xlabel("Ration")
-    plt.ylabel("Total Amount")
-    plt.tight_layout()
-    chart_path = os.path.join("static", "chart.png")
-    plt.savefig(chart_path)
-    plt.close()
-    return render_template("report.html", chart_path=chart_path)
 
 # ================= RUN APP =================
 if __name__ == "__main__":
