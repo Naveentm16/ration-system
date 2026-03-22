@@ -12,6 +12,8 @@
         <a href="/admin_logout" class="btn btn-danger">Logout</a>
     </div>
 
+    <a href="/report" class="btn btn-info mb-3">View Ration Report</a>
+
     <h5>All Entries</h5>
     <table class="table table-bordered">
         <thead class="table-dark">
@@ -21,6 +23,7 @@
                 <th>Ration</th>
                 <th>Amount</th>
                 <th>DateTime</th>
+                <th>Calculated</th>
                 <th>Action</th>
             </tr>
         </thead>
@@ -32,6 +35,13 @@
                 <td>{{ e['ration'] }}</td>
                 <td>{{ "%.2f"|format(e['amount']) }}</td>
                 <td>{{ e['datetime'] }}</td>
+                <td>
+                    {% if e['calculated'] == 1 %}
+                        <span class="badge bg-success">Yes</span>
+                    {% else %}
+                        <span class="badge bg-warning">No</span>
+                    {% endif %}
+                </td>
                 <td><a href="/delete/{{ e['transaction_id'] }}" class="btn btn-sm btn-danger">Delete</a></td>
             </tr>
             {% endfor %}
@@ -66,7 +76,7 @@
                     {% if s['is_settled'] == 0 %}
                         <a href="/settle_month/{{ s['month'] }}" class="btn btn-sm btn-primary">Mark Settled</a>
                     {% else %}
-                        -
+                        <a href="/cancel_settlement/{{ s['month'] }}" class="btn btn-sm btn-danger">Cancel Settlement</a>
                     {% endif %}
                 </td>
             </tr>
