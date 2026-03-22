@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Monthly Settlement - {{ month }}</title>
+</head>
+<body>
+    <h2>Monthly Settlement for {{ month }}</h2>
+    <p>Total Amount: {{ total }}</p>
+    <p>Per Person Share: {{ per_person }}</p>
+
+    <table border="1">
+        <tr>
+            <th>User ID</th>
+            <th>Name</th>
+            <th>Paid</th>
+            <th>Balance</th>
+        </tr>
+        {% for row in df %}
+        <tr>
+            <td>{{ row.id }}</td>
+            <td>{{ row.name }}</td>
+            <td>{{ row.paid }}</td>
+            <td>{{ row.balance }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <br>
+    <a href="/settle_month/{{ month }}">Mark Month Settled</a>
+</body>
+</html>
