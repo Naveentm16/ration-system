@@ -12,8 +12,13 @@ app.permanent_session_lifetime = timedelta(minutes=10)
 
 # ================= DB CONNECTION =================
 def get_db():
-    conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
-    return conn
+    db_url = os.environ.get("DATABASE_URL")
+
+    # Fix Render URL issue
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgres://", 1)
+
+    return psycopg2.connect(db_url, sslmode="require")
 
 # ================= INIT =================
 def init_db():
