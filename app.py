@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, session, send_file
+from flask import Flask, render_template, request, redirect, session
 import psycopg2
 import os, random
 from datetime import datetime, timedelta
@@ -14,13 +14,17 @@ app.permanent_session_lifetime = timedelta(minutes=10)
 def get_db():
     db_url = os.environ.get("DATABASE_URL")
 
-    # Fix Render URL issue
+    if not db_url:
+        raise Exception("DATABASE_URL not set!")
+
+    # ✅ FIX Render PostgreSQL URL issue
     if db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgres://", 1)
 
     return psycopg2.connect(db_url, sslmode="require")
 
-# ================= INIT =================
+
+# ================= INIT DB =================
 def init_db():
     conn = get_db()
     cur = conn.cursor()
@@ -75,27 +79,38 @@ def init_db():
     cur.close()
     conn.close()
 
-init_db()
+
+# ✅ SAFE INIT (NO CRASH)
+try:
+    init_db()
+    print("DB initialized successfully")
+except Exception as e:
+    print("DB INIT ERROR:", e)
+
 
 # ================= USER LOGIN =================
 @app.route("/user_login", methods=["GET","POST"])
 def user_login():
     if request.method=="POST":
-        conn=get_db()
-        cur=conn.cursor()
+        try:
+            conn=get_db()
+            cur=conn.cursor()
 
-        cur.execute("SELECT * FROM users WHERE id=%s AND password=%s",
-                    (request.form["id"], request.form["password"]))
-        user=cur.fetchone()
+            cur.execute("SELECT * FROM users WHERE id=%s AND password=%s",
+                        (request.form["id"], request.form["password"]))
+            user=cur.fetchone()
 
-        cur.close()
-        conn.close()
+            cur.close()
+            conn.close()
 
-        if user:
-            session["user"]=user[0]
-            return redirect("/")
+            if user:
+                session["user"]=user[0]
+                return redirect("/")
+        except Exception as e:
+            return f"DB Error: {e}"
 
     return render_template("user_login.html")
+
 
 # ================= HOME =================
 @app.route("/")
@@ -103,51 +118,61 @@ def home():
     if "user" not in session:
         return redirect("/user_login")
 
-    conn=get_db()
-    cur=conn.cursor()
+    try:
+        conn=get_db()
+        cur=conn.cursor()
 
-    cur.execute("SELECT name FROM users WHERE id=%s", (session["user"],))
-    user=cur.fetchone()
+        cur.execute("SELECT name FROM users WHERE id=%s", (session["user"],))
+        user=cur.fetchone()
 
-    cur.execute("SELECT * FROM entries WHERE id=%s", (session["user"],))
-    entries=cur.fetchall()
+        cur.execute("SELECT * FROM entries WHERE id=%s", (session["user"],))
+        entries=cur.fetchall()
 
-    cur.execute("SELECT settlement_id FROM settlement_details ORDER BY settlement_id DESC LIMIT 1")
-    latest=cur.fetchone()
+        cur.execute("SELECT settlement_id FROM settlement_details ORDER BY settlement_id DESC LIMIT 1")
+        latest=cur.fetchone()
 
-    cur.close()
-    conn.close()
+        cur.close()
+        conn.close()
 
-    latest_id = latest[0] if latest else None
+        latest_id = latest[0] if latest else None
 
-    return render_template("entry.html",
-                           entries=entries,
-                           user_name=user[0],
-                           latest_id=latest_id)
+        return render_template("entry.html",
+                               entries=entries,
+                               user_name=user[0],
+                               latest_id=latest_id)
+
+    except Exception as e:
+        return f"Error: {e}"
+
 
 # ================= ADD ENTRY =================
 @app.route("/submit", methods=["POST"])
 def submit():
-    conn=get_db()
-    cur=conn.cursor()
+    try:
+        conn=get_db()
+        cur=conn.cursor()
 
-    now=datetime.now()
+        now=datetime.now()
 
-    for r,a in zip(request.form.getlist("ration[]"), request.form.getlist("amount[]")):
-        if r and a:
-            tid=session["user"]+now.strftime("%Y%m%d%H%M%S")+str(random.randint(100,999))
+        for r,a in zip(request.form.getlist("ration[]"), request.form.getlist("amount[]")):
+            if r and a:
+                tid=session["user"]+now.strftime("%Y%m%d%H%M%S")+str(random.randint(100,999))
 
-            cur.execute("""
-            INSERT INTO entries
-            VALUES (%s,%s,%s,%s,%s,%s,0)
-            """,(tid,session["user"],request.form["name"],r,float(a),
-                 now.strftime("%Y-%m-%d %H:%M:%S")))
+                cur.execute("""
+                INSERT INTO entries
+                VALUES (%s,%s,%s,%s,%s,%s,0)
+                """,(tid,session["user"],request.form["name"],r,float(a),
+                     now.strftime("%Y-%m-%d %H:%M:%S")))
 
-    conn.commit()
-    cur.close()
-    conn.close()
+        conn.commit()
+        cur.close()
+        conn.close()
 
-    return redirect("/")
+        return redirect("/")
+
+    except Exception as e:
+        return f"Error: {e}"
+
 
 # ================= ADMIN LOGIN =================
 @app.route("/login", methods=["GET","POST"])
@@ -159,98 +184,110 @@ def login():
 
     return render_template("login.html")
 
+
 # ================= ADMIN =================
 @app.route("/admin")
 def admin():
     if "admin" not in session:
         return redirect("/login")
 
-    conn=get_db()
-    cur=conn.cursor()
+    try:
+        conn=get_db()
+        cur=conn.cursor()
 
-    cur.execute("SELECT * FROM entries")
-    data=cur.fetchall()
+        cur.execute("SELECT * FROM entries")
+        data=cur.fetchall()
 
-    cur.execute("SELECT * FROM users")
-    users=cur.fetchall()
+        cur.execute("SELECT * FROM users")
+        users=cur.fetchall()
 
-    cur.execute("SELECT DISTINCT settlement_id FROM settlement_details ORDER BY settlement_id DESC")
-    settlements=cur.fetchall()
+        cur.execute("SELECT DISTINCT settlement_id FROM settlement_details ORDER BY settlement_id DESC")
+        settlements=cur.fetchall()
 
-    cur.close()
-    conn.close()
+        cur.close()
+        conn.close()
 
-    return render_template("admin.html",
-                           data=data,
-                           users=users,
-                           settlements=settlements)
+        return render_template("admin.html",
+                               data=data,
+                               users=users,
+                               settlements=settlements)
+
+    except Exception as e:
+        return f"Error: {e}"
+
 
 # ================= CALCULATE =================
 @app.route("/calculate", methods=["POST"])
 def calculate():
-    tids=request.form.getlist("tids")
-    users_sel=request.form.getlist("users")
+    try:
+        tids=request.form.getlist("tids")
+        users_sel=request.form.getlist("users")
 
-    if not tids or not users_sel:
-        return "Select transactions & users"
+        if not tids or not users_sel:
+            return "Select transactions & users"
 
-    conn=get_db()
+        conn=get_db()
 
-    query = f"SELECT * FROM entries WHERE transaction_id IN ({','.join(['%s']*len(tids))})"
-    df = pd.read_sql(query, conn, params=tids)
+        query = f"SELECT * FROM entries WHERE transaction_id IN ({','.join(['%s']*len(tids))})"
+        df = pd.read_sql(query, conn, params=tids)
 
-    all_users=pd.DataFrame({"id":users_sel})
+        all_users=pd.DataFrame({"id":users_sel})
 
-    totals=df.groupby(["id","name"])["amount"].sum().reset_index()
-    merged=pd.merge(all_users, totals, on="id", how="left")
+        totals=df.groupby(["id","name"])["amount"].sum().reset_index()
+        merged=pd.merge(all_users, totals, on="id", how="left")
 
-    merged["name"]=merged["name"].fillna(merged["id"])
-    merged["amount"]=merged["amount"].fillna(0)
+        merged["name"]=merged["name"].fillna(merged["id"])
+        merged["amount"]=merged["amount"].fillna(0)
 
-    total=merged["amount"].sum()
-    avg=total/len(merged)
+        total=merged["amount"].sum()
+        avg=total/len(merged)
 
-    merged["balance"]=merged["amount"]-avg
+        merged["balance"]=merged["amount"]-avg
 
-    owe,receive={},{}
-    for _,r in merged.iterrows():
-        if r["balance"]<0:
-            owe[r["name"]]=-r["balance"]
-        elif r["balance"]>0:
-            receive[r["name"]]=r["balance"]
+        owe,receive={},{}
+        for _,r in merged.iterrows():
+            if r["balance"]<0:
+                owe[r["name"]]=-r["balance"]
+            elif r["balance"]>0:
+                receive[r["name"]]=r["balance"]
 
-    sid=datetime.now().strftime("%Y%m%d%H%M%S")
+        sid=datetime.now().strftime("%Y%m%d%H%M%S")
 
-    cur=conn.cursor()
+        cur=conn.cursor()
 
-    for d in list(owe.keys()):
-        debt=owe[d]
-        for c in list(receive.keys()):
-            if debt==0: break
+        for d in list(owe.keys()):
+            debt=owe[d]
+            for c in list(receive.keys()):
+                if debt==0: break
 
-            pay=min(debt,receive[c])
+                pay=min(debt,receive[c])
 
-            cur.execute("""
-            INSERT INTO settlement_details
-            (settlement_id,payer,receiver,amount)
-            VALUES (%s,%s,%s,%s)
-            """,(sid,d,c,round(pay,2)))
+                cur.execute("""
+                INSERT INTO settlement_details
+                (settlement_id,payer,receiver,amount)
+                VALUES (%s,%s,%s,%s)
+                """,(sid,d,c,round(pay,2)))
 
-            debt-=pay
-            receive[c]-=pay
+                debt-=pay
+                receive[c]-=pay
 
-            if receive[c]==0:
-                del receive[c]
+                if receive[c]==0:
+                    del receive[c]
 
-    update_query = f"UPDATE entries SET calculated=1 WHERE transaction_id IN ({','.join(['%s']*len(tids))})"
-    cur.execute(update_query, tids)
+        update_query = f"UPDATE entries SET calculated=1 WHERE transaction_id IN ({','.join(['%s']*len(tids))})"
+        cur.execute(update_query, tids)
 
-    conn.commit()
-    cur.close()
-    conn.close()
+        conn.commit()
+        cur.close()
+        conn.close()
 
-    return redirect("/admin")
+        return redirect("/admin")
 
-# ================= RUN ================
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ================= RUN =================
 if __name__=="__main__":
-    app.run()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
