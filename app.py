@@ -251,6 +251,6 @@ def calculate():
 
     return redirect("/admin")
 
-# ================= RUN =================
+# ================= RUN ================
 if __name__=="__main__":
     app.run()
